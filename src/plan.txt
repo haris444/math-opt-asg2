@@ -1,0 +1,196 @@
+Step 1 Data Loading and Preprocessing:
+
+Load all problem-specific data: customer coordinates, demands, service times, and the multiple time windows for each customer.
+Define depot parameters: coordinates, its operational time window (e.g., 0 to a large planning horizon), zero demand, and zero service time.
+Calculate all-pairs travel distances (Euclidean) and then travel times based on the given truck speed.
+Perform any necessary preprocessing on time windows, such as merging overlapping windows for a single customer  or ensuring customer time windows are consistent with the depot's operational window.
+
+Step 2 Basic Route Evaluation Function (Helper Function):
+
+Create a function that takes a potential route (a sequence of customers), and a specific departure time from the depot.
+This function should:
+Check vehicle capacity feasibility throughout the route.
+Calculate arrival, service start (considering waiting if arriving early and selecting one of the multiple time windows), and service completion times for each customer in the sequence. Service must start within one of the customer's time windows.
+Determine if the route is feasible with respect to all time windows.
+If feasible, return the total travel distance of this route.
+
+Step 3
+Implement the Label Class/Structure for the Pricing Problem (ESPPRC):
+
+Define a data structure (e.g., Python class) for labels used in the pricing problem. Each label should represent a partial path and store:
+current_node_id: The last customer visited in the partial path.
+visited_customers_set: A set of customers already included in this partial path to ensure elementarity (each customer visited at most once).
+current_load: The total demand accumulated so far in the partial path.
+dominant_forward_start_intervals: A list of dominant forward start time intervals at the current_node_id. Each interval in this list will typically be a tuple like (earliest_service_start_time, latest_service_start_time, accumulated_travel_distance_for_this_interval_path). These intervals represent feasible service start times at the current node such that all preceding customers in the path could also be feasibly serviced.
+
+accumulated_dual_value_sum: The sum of the dual variables (π 
+i
+​
+ ) associated with the customers visited in this partial path.
+path_sequence: The ordered list of customers visited in the partial path, to reconstruct the route.
+
+
+Step 4 Implement Forward Start Time Interval Logic (Core of ESPPRC):
+
+This is based on Section 3.4.1 of the Hoogeboom et al. (2019) paper.
+Initialization at Depot: For a label starting at the depot, the initial dominant forward start interval is determined by the depot's own time window, with an accumulated travel distance of 0.
+Extension Logic: Implement a function to extend a label L_f (ending at customer i) to a new customer j.
+For each dominant forward start interval y in L_f's list at node i:
+For each original time window t of customer j: 
+Calculate the new candidate forward start interval z at customer j. The start and end times of this interval z are determined using logic similar to equation (3.5) from the paper: E 
+p 
+′
+ 
+​
+ (z)=max{E 
+p
+​
+ (y)+τ 
+i,j
+​
+ ,e 
+j
+t
+​
+ } and L 
+p 
+′
+ 
+​
+ (z)=min{max{L 
+p
+​
+ (y)+τ 
+i,j
+​
+ ,e 
+j
+t
+​
+ },l 
+j
+t
+​
+ }. Here, τ 
+ij
+​
+  is the duration from i to j, including service time at i and travel time from i to j.
+
+Calculate the associated accumulated travel distance for this new interval z. This will be the accumulated travel distance of interval y plus the travel distance from i to j. (Equation (3.6) is for duration; adapt for your objective of travel distance).
+Collect all such candidate intervals generated at j from all dominant intervals of L_f.
+Dominance among Generated Intervals: From the set of candidate intervals just generated for j (for this specific extension from i), identify and keep only the "dominant forward start intervals". These will form the list of intervals for the new label at j.
+
+
+
+Step 5 Implement ESPPRC - Monodirectional Forward Labeling Algorithm:
+
+Initialization: Create an initial label representing the start at the depot (node 0).
+Processing Unextended Labels: Maintain a list or priority queue of unprocessed (non-dominated) labels.
+Label Extension Step:
+Select and remove a non-dominated label L_f ending at node i from the list.
+For each customer j not yet in L_f.visited_customers_set:
+Check vehicle capacity: L_f.current_load + demand_of_j \le Q.
+Use the logic from Step 4 to generate the set of dominant forward start intervals (and their associated accumulated travel distances) at j by extending L_f to j.
+Ensure that it's possible to arrive at j before the end of j's last time window.
+If feasible dominant forward start intervals are found at j:
+Create a new label L_f' for the path ending at j. Update its attributes: current_node_id = j, new visited_customers_set, new current_load, the new list of dominant_forward_start_intervals, accumulated_dual_value_sum = L_f.accumulated_dual_value_sum + dual_price_of_j, and the updated path_sequence.
+Dominance Between Different Labels (Proposition 3.1):
+Implement the dominance rule from Proposition 3.1 to compare labels that end at the same customer j. This is crucial to keep the number of labels manageable.
+This requires calculating ϕ(L 
+f
+1
+​
+ ,L 
+f
+2
+​
+ ) as detailed in Algorithm 3.1 in the paper.
+Condition 5 of Proposition 3.1, ϕ(L 
+f
+1
+​
+ ,L 
+f
+2
+​
+ )≤π(L 
+f
+1
+​
+ )−π(L 
+f
+2
+​
+ ) (where π(L 
+f
+​
+ ) is the sum of duals), is used to compare the cost-effectiveness of labels considering future extensions.
+When a new label L_f' is generated for node j, compare it with all existing non-dominated labels already stored for node j. If L_f' is dominated, discard it. If L_f' dominates any existing labels, discard those. Add L_f' to the set of non-dominated labels for node j.
+Route Completion (Reaching Destination Depot):
+When a label is extended from a customer j back to the destination depot (node n+1):
+Calculate the total travel distance of this completed route. This becomes route_details['cost'] for the Restricted Master Problem.
+The reduced cost of this route is: (total_travel_distance + alpha_penalty) - L_f.accumulated_dual_value_sum.
+Keep track of the route (or multiple routes) with the most negative reduced cost found during the ESPPRC execution.
+Termination: The ESPPRC process for one iteration of column generation finishes when no more labels can be extended, or a predefined limit (e.g., number of labels, iterations) is reached.
+
+
+
+
+
+Step 6 Integrate ESPPRC into the Main Column Generation Loop (column_generation_solver):
+
+Initial Feasible Routes: Generate a set of initial feasible routes to start the column generation process. These can be simple (e.g., one customer per route if capacity/time allows) or from a basic heuristic.
+Iterative Process:
+Solve Restricted Master Problem (RMP): Using the current pool of routes (current_routes_pool), solve the LP relaxation of the set covering problem (solve_restricted_master_problem). The objective is to minimize ∑(c 
+r
+​
+ +α)y 
+r
+​
+ , subject to each customer being covered. Obtain the dual prices (π 
+i
+​
+ ) for the customer covering constraints  and the current RMP objective value.
+
+
+Solve Pricing Subproblem (ESPPRC): Call your implemented ESPPRC (from Step 5) using the dual prices obtained from the RMP. The ESPPRC will search for one or more routes with a negative reduced cost. The reduced cost is c 
+r
+​
+ −∑σ 
+ir
+​
+ π 
+i
+​
+  (where c 
+r
+​
+  here is total travel distance + alpha_penalty).
+
+Check for New Routes: If the ESPPRC finds route(s) with negative reduced cost:
+Add these new, improving routes to current_routes_pool.
+Repeat the process (solve RMP again).
+Termination of CG Loop: If the ESPPRC finds no routes with a negative reduced cost (or the improvement is below a small tolerance), the LP relaxation of the overall problem is considered solved for the current set of columns. The objective value of this final RMP is your Lower Bound (LB).
+
+
+
+
+
+Step 7 Testing and Debugging:
+
+Start with very small, manageable instances (e.g., 2-3 customers) to trace the logic of label creation, start time interval propagation, dominance checks, and reduced cost calculations.
+Verify that the column generation process converges.
+
+
+
+
+Step 8 Solve Final Master Integer Program (IP) and Calculate Optimality Gap:
+
+Once the column generation loop (Step 6) terminates:
+You have the Lower Bound (LB) from the objective value of the final RMP.
+Take the complete pool of unique routes generated (current_routes_pool).
+Solve the Master Problem as an Integer Program (solve_master_ip) using these routes. This will select an integer combination of routes that covers all customers at minimum cost (based on the available routes).
+The objective value of this IP solution is your Upper Bound (UB). This solution is your feasible integer solution.
+Calculate and report the optimality gap. A common formula is (UB - LB) / UB or (UB - LB) / LB. Clearly state which one you use.
+This structured approach ensures you are building upon a theoretically exact method (the "pricing" part of Branch-and-Price) and will allow you to generate a feasible integer solution and quantify its quality with an optimality gap.
+

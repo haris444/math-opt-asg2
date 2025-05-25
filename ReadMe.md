@@ -1,0 +1,1 @@
+Intended to run in a google colab. Follows the plan file. Steps 1-5 are implemented and tested. will do 6-8 + bidirectional search and integrate with the main solver in "draft" 
