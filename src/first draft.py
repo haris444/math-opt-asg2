@@ -58,8 +58,9 @@ def solve_master_ip(final_routes, customers_list, alpha_penalty, model_name="Mas
     """
     Solves the Master Problem as an Integer Program with the final set of routes.
     """
-    master_ip = gp.Model(model_name)
-    # master_ip.setParam('OutputFlag', 0) # Optional: show Gurobi output
+    env = gp.Env(params=params)
+    master_ip = gp.Model(model_name, env = env)
+    master_ip.setParam('OutputFlag', 0) # Optional: show Gurobi output
 
     route_vars = {}
     obj_expr = gp.LinExpr()
@@ -188,85 +189,46 @@ def column_generation_solver(initial_routes, customers_list, demands, service_ti
         
         
 def solve_espprc_with_multiple_time_windows(
-        customers_list, demands, service_times, time_windows_data,
-        coordinates_data, vehicle_capacity, speed, alpha_penalty,
-        dual_prices, depot_id=0, depot_max_time=float('inf')): # Add other necessary params
+    customers_list, demands, service_times, time_windows_data,
+    coordinates_data, vehicle_capacity, speed, alpha_penalty,
+    dual_prices, depot_id=0, depot_max_time=float('inf')):
     """
-    CONCEPTUAL placeholder for the Elementary Shortest Path Problem with Resource Constraints
-    and Multiple Time Windows.
-    
-    This function needs to implement a sophisticated labeling algorithm as
-    described in Hoogeboom et al. (2019).
-
-    Args:
-        customers_list: List of customer IDs.
-        demands: Dict of customer demands.
-        service_times: Dict of customer service times.
-        time_windows_data: Dict of customer multiple time windows.
-        coordinates_data: Dict of all location coordinates.
-        vehicle_capacity: Vehicle capacity.
-        speed: Vehicle speed.
-        alpha_penalty: Penalty for using a vehicle.
-        dual_prices: Dict of dual prices for each customer from RMP.
-        depot_id: ID of the depot.
-        depot_max_time: Planning horizon / max return time to depot.
-
-
-    Returns:
-        tuple: (best_new_route_dict, reduced_cost_float)
-               best_new_route_dict: {'cost': travel_dist, 'customers_served': [...], 'id': ...} or None
-               reduced_cost_float: The reduced cost of the best route, or float('inf')
+    Main entry point for solving ESPPRC with bidirectional search.
     """
-    print("    Running Pricing Subproblem (ESPPRC)...")
-    # --- THIS IS WHERE THE COMPLEX LABELING ALGORITHM FROM THE PAPER GOES ---
-    # 1. Initialize labels at the depot.
-    #    A label typically contains: (current_node, visited_nodes_mask_or_set, current_load,
-    #                                current_time_intervals_list, current_path_cost_for_intervals,
-    #                                accumulated_dual_value_sum)
-    #    The "cost" here is travel distance. Time intervals are for feasibility.
+    # Prepare data in expected format
+    data = {
+        'customers_list': customers_list,
+        'demands': demands,
+        'service_times': service_times,
+        'time_windows_data': time_windows_data,
+        'coordinates_data': coordinates_data,
+        'vehicle_capacity': vehicle_capacity,
+        'speed': speed,
+        'depot_id': depot_id,
+        'depot_info': {
+            'id': depot_id,
+            'time_window': (0, depot_max_time),
+            'demand': 0,
+            'service_time': 0
+        },
+        'dual_prices': dual_prices,
+        'travel_times': {},  # Will be populated from existing data
+        'travel_distances': {}  # Will be populated from existing data
+    }
 
-    # 2. Iteratively extend labels:
-    #    For each non-dominated label L ending at node u:
-    #        For each reachable, unvisited neighbor v:
-    #            Create new label L_new by extending L to v.
-    #            - Check capacity.
-    #            - Calculate new time intervals at v based on L's intervals, service_time[u],
-    #              travel_time(u,v), and v's multiple time windows. This is the core of
-    #              Hoogeboom's "start time intervals"[cite: 118, 123, 133].
-    #            - Update path travel distance.
-    #            - Update accumulated duals.
-    #            - If L_new is feasible and not dominated by existing labels at v, add it.
+    # Populate travel times and distances if not already done
+    # Assuming you have calculate_distance_matrix and calculate_travel_time_matrix functions
+    if 'travel_distances' not in data or not data['travel_distances']:
+        from your_utils import calculate_distance_matrix, calculate_travel_time_matrix
+        data['travel_distances'] = calculate_distance_matrix(coordinates_data)
+        data['travel_times'] = calculate_travel_time_matrix(data['travel_distances'], speed)
 
-    # 3. Apply dominance rules (Proposition 3.1, 3.2 from paper [cite: 167, 204])
-    #    This involves the phi(L1, L2) calculation (Algorithm 3.1 [cite: 173]).
+    # Call bidirectional ESPPRC
+    routes = solve_espprc_bidirectional(data, dual_prices, alpha_penalty)
 
-    # 4. When a label reaches the depot (completing a route):
-    #    - Calculate its actual cost C_r = total_travel_distance_of_route + alpha_penalty.
-    #    - Calculate its reduced cost = C_r - accumulated_dual_value_sum.
-    #    - Keep track of the route with the most negative reduced cost.
-
-    # 5. Consider bidirectional search [cite: 36, 141] and heuristic pricing [cite: 36, 220]
-    #    for efficiency.
-
-    # --- Placeholder: In a real implementation, this would return actual results ---
-    print("    ESPPRC Labeling Algorithm (from Hoogeboom et al.) needs to be implemented here.")
-    
-    # For now, let's simulate finding no new route to allow the loop to terminate.
-    # In a real scenario, you would build routes and calculate their reduced costs.
-    # If you had a simple heuristic route generator, you could call it here.
-    
-    # Example of what a found route might look like (if your ESPPRC found one):
-    # found_route = {
-    #     'id': f"esp_route_{some_unique_id}",
-    #     'cost': 150.7, # This is purely travel distance
-    #     'customers_served': [cust_a, cust_b, cust_c],
-    #     # Other details like actual start/end times, chosen TWs per customer, etc.
-    # }
-    # C_r = found_route['cost'] + alpha_penalty
-    # sum_duals = sum(dual_prices.get(c,0) for c in found_route['customers_served'])
-    # current_reduced_cost = C_r - sum_duals
-    # if current_reduced_cost < most_negative_reduced_cost_so_far:
-    #    best_new_route = found_route
-    #    reduced_cost = current_reduced_cost
-
-    return None, float('inf') # Placeholder
+    if routes:
+        # Return best route
+        best_route = routes[0]  # Already sorted by reduced cost
+        return best_route, best_route['reduced_cost']
+    else:
+        return None, float('inf')
